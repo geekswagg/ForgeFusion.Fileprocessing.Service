@@ -15,6 +15,9 @@ public interface IFileStorageService
     Task<string> ArchiveAsync(string blobName, string? fromFolder = null, string? correlationId = null, string? comment = null, CancellationToken cancellationToken = default);
 
     Task UpdateStatusAsync(string blobName, FileProcessingStatus status, string? folder = null, CancellationToken cancellationToken = default);
+
+    // New: count files by type
+    Task<IReadOnlyList<FileTypeCount>> GetFileTypeCountsAsync(string? folder = null, CancellationToken cancellationToken = default);
 }
 
 public class AzureBlobFileStorageService : IFileStorageService
@@ -190,6 +193,27 @@ public class AzureBlobFileStorageService : IFileStorageService
             };
             await _table.AddEntityAsync(entity, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    public async Task<IReadOnlyList<FileTypeCount>> GetFileTypeCountsAsync(string? folder = null, CancellationToken cancellationToken = default)
+    {
+        await EnsureResourcesAsync(cancellationToken).ConfigureAwait(false);
+
+        var results = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+        await foreach (var page in _container.GetBlobsAsync(prefix: string.IsNullOrWhiteSpace(folder) ? null : folder.TrimEnd('/') + "/").AsPages())
+        {
+            foreach (var item in page.Values)
+            {
+                // get extension from name (after last '.')
+                var name = item.Name;
+                var ext = Path.GetExtension(name);
+                var key = string.IsNullOrWhiteSpace(ext) ? "(none)" : ext.TrimStart('.');
+                results[key] = results.TryGetValue(key, out var c) ? c + 1 : 1;
+            }
+        }
+
+        return results.Select(kvp => new FileTypeCount { FileType = kvp.Key, Count = kvp.Value }).OrderByDescending(x => x.Count).ThenBy(x => x.FileType, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private static string Combine(string folder, string fileName)

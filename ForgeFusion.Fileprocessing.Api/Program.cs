@@ -1,6 +1,8 @@
 using ForgeFusion.Fileprocessing.Service;
 using ForgeFusion.Fileprocessing.Service.Models;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.OpenApi.Models;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,16 +24,29 @@ var options = new BlobStorageOptions
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton<IFileStorageService, AzureBlobFileStorageService>();
 
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+// Minimal OpenAPI + Scalar UI
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer((document, context, ct) =>
+    {
+        document.Info = new OpenApiInfo
+        {
+            Title = "ForgeFusion Fileprocessing API",
+            Version = "v1"
+        };
+        return Task.CompletedTask;
+    });
+});
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
+// Expose OpenAPI document and Scalar UI
+app.MapOpenApi();
+app.MapScalarApiReference(options =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+    options.Title = "ForgeFusion Fileprocessing API";
+    options.EndpointPathPrefix = string.Empty;
+});
 
 app.MapPost("/api/files/upload", async ([FromServices] IFileStorageService storage, HttpRequest request, CancellationToken ct, [FromQuery] string? fileName, [FromQuery] string? folder, [FromQuery] string? comment, [FromQuery] string? correlationId) =>
 {
@@ -69,5 +84,12 @@ app.MapPost("/api/files/archive/{blobName}", async ([FromServices] IFileStorageS
     var archived = await storage.ArchiveAsync(blobName, fromFolder, correlationId, comment, ct);
     return Results.Ok(new { archived });
 }).Produces(StatusCodes.Status200OK);
+
+// New: return counts by file type (extension) optionally scoped to folder
+app.MapGet("/api/files/types", async ([FromServices] IFileStorageService storage, [FromQuery] string? folder, CancellationToken ct) =>
+{
+    var counts = await storage.GetFileTypeCountsAsync(folder, ct);
+    return Results.Ok(counts);
+}).Produces<IEnumerable<FileTypeCount>>(StatusCodes.Status200OK);
 
 app.Run();
