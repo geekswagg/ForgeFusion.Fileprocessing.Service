@@ -1,0 +1,40 @@
+﻿{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "http": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:5116",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    },
+    "https": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "https://localhost:7200;http://localhost:5116",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    },
+    "ForgeFusion.Fileprocessing.Api": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "https://localhost:7123;http://localhost:5123",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Storage__ConnectionString": "UseDevelopmentStorage=true",
+        "Storage__ContainerName": "files",
+        "Storage__QueueName": "file-uploads",
+        "Storage__TableName": "fileProcessing",
+        "Storage__AuditTableName": "fileAudit",
+        "Storage__InFolder": "in",
+        "Storage__OutFolder": "out",
+        "Storage__ArchiveFolder": "archive"
+      }
+    }
+  }
+}

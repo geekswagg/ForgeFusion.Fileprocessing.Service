@@ -1,0 +1,6 @@
+@ForgeFusion.Fileprocessing.Api_HostAddress = http://localhost:5116
+
+GET {{ForgeFusion.Fileprocessing.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

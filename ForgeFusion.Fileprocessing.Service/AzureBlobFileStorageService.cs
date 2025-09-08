@@ -1,0 +1,220 @@
+using Azure;
+using Azure.Data.Tables;
+using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using Azure.Storage.Queues;
+using System.Text.Json;
+using ForgeFusion.Fileprocessing.Service.Models;
+
+namespace ForgeFusion.Fileprocessing.Service;
+
+public interface IFileStorageService
+{
+    Task<string> UploadAsync(Stream content, string fileName, string? folder = null, string? contentType = null, string? correlationId = null, string? comment = null, CancellationToken cancellationToken = default);
+    Task DownloadAsync(string blobName, Stream destination, string? folder = null, CancellationToken cancellationToken = default);
+    Task<string> ArchiveAsync(string blobName, string? fromFolder = null, string? correlationId = null, string? comment = null, CancellationToken cancellationToken = default);
+
+    Task UpdateStatusAsync(string blobName, FileProcessingStatus status, string? folder = null, CancellationToken cancellationToken = default);
+}
+
+public class AzureBlobFileStorageService : IFileStorageService
+{
+    private readonly BlobContainerClient _container;
+    private readonly QueueClient _queue;
+    private readonly TableClient _table;
+    private readonly TableClient _auditTable;
+    private readonly BlobStorageOptions _options;
+
+    public AzureBlobFileStorageService(BlobStorageOptions options)
+    {
+        _options = options;
+        _container = new BlobContainerClient(options.ConnectionString, options.ContainerName);
+        _queue = new QueueClient(options.ConnectionString, options.QueueName);
+        _table = new TableClient(options.ConnectionString, options.TableName);
+        _auditTable = new TableClient(options.ConnectionString, options.AuditTableName);
+    }
+
+    public async Task<string> UploadAsync(Stream content, string fileName, string? folder = null, string? contentType = null, string? correlationId = null, string? comment = null, CancellationToken cancellationToken = default)
+    {
+        await EnsureResourcesAsync(cancellationToken).ConfigureAwait(false);
+
+        folder ??= _options.InFolder;
+        var blobName = Combine(folder, fileName);
+        var blob = _container.GetBlobClient(blobName);
+
+        var headers = new BlobHttpHeaders();
+        if (!string.IsNullOrEmpty(contentType))
+            headers.ContentType = contentType;
+
+        await blob.UploadAsync(content, new BlobUploadOptions
+        {
+            HttpHeaders = headers
+        }, cancellationToken).ConfigureAwait(false);
+
+        // table entry
+        var properties = await blob.GetPropertiesAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        var entity = new FileProcessingEntity
+        {
+            RowKey = blobName,
+            FileName = fileName,
+            ContainerName = _options.ContainerName,
+            Folder = folder,
+            Status = FileProcessingStatus.Uploaded,
+            CorrelationId = correlationId,
+            ContentType = properties.Value.ContentType,
+            ContentLength = properties.Value.ContentLength
+        };
+        await _table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken).ConfigureAwait(false);
+
+        // queue event
+        var evt = new FileUploadedEvent(blobName, _options.ContainerName, folder, correlationId, entity.ContentType, entity.ContentLength, DateTimeOffset.UtcNow);
+        var json = JsonSerializer.Serialize(evt);
+        await _queue.SendMessageAsync(Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json)), cancellationToken).ConfigureAwait(false);
+
+        // audit entry
+        await LogAuditAsync(new FileAuditEntity
+        {
+            RowKey = Guid.NewGuid().ToString("N"),
+            BlobName = blobName,
+            ContainerName = _options.ContainerName,
+            FileName = fileName,
+            Folder = folder,
+            Status = FileProcessingStatus.Uploaded,
+            Action = FileActionType.Upload,
+            ContentType = entity.ContentType,
+            ContentLength = entity.ContentLength,
+            Comment = comment,
+            CorrelationId = correlationId
+        }, cancellationToken).ConfigureAwait(false);
+
+        return blobName;
+    }
+
+    public async Task DownloadAsync(string blobName, Stream destination, string? folder = null, CancellationToken cancellationToken = default)
+    {
+        await EnsureResourcesAsync(cancellationToken).ConfigureAwait(false);
+        var path = folder is null ? blobName : Combine(folder, blobName);
+        var blob = _container.GetBlobClient(path);
+        var props = await blob.GetPropertiesAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        await blob.DownloadToAsync(destination, cancellationToken).ConfigureAwait(false);
+
+        await LogAuditAsync(new FileAuditEntity
+        {
+            RowKey = Guid.NewGuid().ToString("N"),
+            BlobName = path,
+            ContainerName = _options.ContainerName,
+            FileName = Path.GetFileName(path),
+            Folder = folder,
+            Status = FileProcessingStatus.Processed, // download does not change processing status, but we log action
+            Action = FileActionType.Download,
+            ContentType = props.Value.ContentType,
+            ContentLength = props.Value.ContentLength
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<string> ArchiveAsync(string blobName, string? fromFolder = null, string? correlationId = null, string? comment = null, CancellationToken cancellationToken = default)
+    {
+        await EnsureResourcesAsync(cancellationToken).ConfigureAwait(false);
+        var sourcePath = fromFolder is null ? blobName : Combine(fromFolder, blobName);
+        var sourceBlob = _container.GetBlobClient(sourcePath);
+        if (!await sourceBlob.ExistsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            throw new RequestFailedException(404, $"Blob not found: {sourcePath}");
+        }
+
+        var destPath = Combine(_options.ArchiveFolder, Path.GetFileName(sourcePath));
+        var destBlob = _container.GetBlobClient(destPath);
+
+        // Copy and then delete source
+        var copyResponse = await destBlob.StartCopyFromUriAsync(sourceBlob.Uri, cancellationToken: cancellationToken).ConfigureAwait(false);
+        // Poll copy status (simple loop with small delay)
+        BlobProperties destProps;
+        do
+        {
+            await Task.Delay(200, cancellationToken).ConfigureAwait(false);
+            destProps = (await destBlob.GetPropertiesAsync(cancellationToken: cancellationToken).ConfigureAwait(false)).Value;
+        } while (destProps.CopyStatus == CopyStatus.Pending);
+
+        if (destProps.CopyStatus != CopyStatus.Success)
+        {
+            throw new RequestFailedException(500, $"Copy to archive failed with status {destProps.CopyStatus}");
+        }
+
+        await sourceBlob.DeleteIfExistsAsync(DeleteSnapshotsOption.IncludeSnapshots, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        // update status record
+        await UpdateStatusAsync(Path.GetFileName(sourcePath), FileProcessingStatus.Archived, _options.ArchiveFolder, cancellationToken).ConfigureAwait(false);
+
+        // audit
+        await LogAuditAsync(new FileAuditEntity
+        {
+            RowKey = Guid.NewGuid().ToString("N"),
+            BlobName = destPath,
+            ContainerName = _options.ContainerName,
+            FileName = Path.GetFileName(destPath),
+            Folder = _options.ArchiveFolder,
+            Status = FileProcessingStatus.Archived,
+            Action = FileActionType.Archive,
+            ContentType = destProps.ContentType,
+            ContentLength = destProps.ContentLength,
+            CorrelationId = correlationId,
+            Comment = comment
+        }, cancellationToken).ConfigureAwait(false);
+
+        return destPath;
+    }
+
+    public async Task UpdateStatusAsync(string blobName, FileProcessingStatus status, string? folder = null, CancellationToken cancellationToken = default)
+    {
+        await EnsureResourcesAsync(cancellationToken).ConfigureAwait(false);
+        var path = folder is null ? blobName : Combine(folder, blobName);
+
+        try
+        {
+            var response = await _table.GetEntityAsync<FileProcessingEntity>(FileProcessingEntity.DefaultPartitionKey, path, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var entity = response.Value;
+            entity.Status = status;
+            entity.Folder = InferFolderFromStatus(status);
+            await _table.UpdateEntityAsync(entity, entity.ETag, TableUpdateMode.Replace, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        {
+            // create if not exist
+            var entity = new FileProcessingEntity
+            {
+                RowKey = path,
+                FileName = Path.GetFileName(path),
+                ContainerName = _options.ContainerName,
+                Folder = InferFolderFromStatus(status),
+                Status = status
+            };
+            await _table.AddEntityAsync(entity, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static string Combine(string folder, string fileName)
+        => string.IsNullOrWhiteSpace(folder) ? fileName : folder.TrimEnd('/') + "/" + fileName;
+
+    private string InferFolderFromStatus(FileProcessingStatus status) => status switch
+    {
+        FileProcessingStatus.Initial or FileProcessingStatus.Uploaded or FileProcessingStatus.Processing => _options.InFolder,
+        FileProcessingStatus.Processed => _options.OutFolder,
+        FileProcessingStatus.Archived => _options.ArchiveFolder,
+        _ => _options.InFolder
+    };
+
+    private async Task EnsureResourcesAsync(CancellationToken ct)
+    {
+        await _container.CreateIfNotExistsAsync(PublicAccessType.None, cancellationToken: ct).ConfigureAwait(false);
+        await _queue.CreateIfNotExistsAsync(cancellationToken: ct).ConfigureAwait(false);
+        await _table.CreateIfNotExistsAsync(ct).ConfigureAwait(false);
+        await _auditTable.CreateIfNotExistsAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task LogAuditAsync(FileAuditEntity entry, CancellationToken ct)
+    {
+        // Enforce partition key to configured audit table prefix
+        entry.PartitionKey = "fileAudit";
+        await _auditTable.AddEntityAsync(entry, ct).ConfigureAwait(false);
+    }
+}
