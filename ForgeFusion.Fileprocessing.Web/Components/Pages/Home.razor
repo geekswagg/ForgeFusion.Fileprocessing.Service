@@ -1,7 +1,126 @@
 ﻿@page "/"
+@using ForgeFusion.Fileprocessing.Web.Services
+@inject IFileProcessingApiService ApiService
+@rendermode InteractiveServer
 
-<PageTitle>Home</PageTitle>
+<PageTitle>File Processing - Home</PageTitle>
 
-<h1>Hello, world!</h1>
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <h1 class="display-4">File Processing Dashboard</h1>
+            <p class="lead">Manage your files with upload, download, and audit capabilities.</p>
+        </div>
+    </div>
 
-Welcome to your new app.
+    <div class="row mb-4">
+        <div class="col-md-6 col-lg-3 mb-3">
+            <div class="card border-primary">
+                <div class="card-body text-center">
+                    <i class="bi bi-cloud-upload fs-1 text-primary"></i>
+                    <h5 class="card-title">Upload Files</h5>
+                    <p class="card-text">Upload new files to the system</p>
+                    <a href="/upload" class="btn btn-primary">Go to Upload</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6 col-lg-3 mb-3">
+            <div class="card border-success">
+                <div class="card-body text-center">
+                    <i class="bi bi-folder fs-1 text-success"></i>
+                    <h5 class="card-title">File Browser</h5>
+                    <p class="card-text">Browse and manage existing files</p>
+                    <a href="/files" class="btn btn-success">Browse Files</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6 col-lg-3 mb-3">
+            <div class="card border-warning">
+                <div class="card-body text-center">
+                    <i class="bi bi-bar-chart fs-1 text-warning"></i>
+                    <h5 class="card-title">Statistics</h5>
+                    <p class="card-text">View file type statistics</p>
+                    <a href="/statistics" class="btn btn-warning">View Stats</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6 col-lg-3 mb-3">
+            <div class="card border-info">
+                <div class="card-body text-center">
+                    <i class="bi bi-clock-history fs-1 text-info"></i>
+                    <h5 class="card-title">Audit History</h5>
+                    <p class="card-text">Review file processing history</p>
+                    <a href="/audit" class="btn btn-info">View Audit</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @if (recentFiles.Any())
+    {
+        <div class="row">
+            <div class="col-12">
+                <h3>Recent Files</h3>
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Folder</th>
+                                <th>Size</th>
+                                <th>Type</th>
+                                <th>Last Modified</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var file in recentFiles.Take(5))
+                            {
+                                <tr>
+                                    <td>@file.Name</td>
+                                    <td><span class="badge bg-secondary">@file.Folder</span></td>
+                                    <td>@FormatFileSize(file.ContentLength)</td>
+                                    <td>@file.ContentType</td>
+                                    <td>@file.LastModified.ToString("yyyy-MM-dd HH:mm")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private List<Models.FileItem> recentFiles = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            recentFiles = await ApiService.GetFilesAsync();
+            recentFiles = recentFiles.OrderByDescending(f => f.LastModified).ToList();
+        }
+        catch (Exception ex)
+        {
+            // Handle error - could show a notification
+            Console.WriteLine($"Error loading files: {ex.Message}");
+        }
+    }
+
+    private string FormatFileSize(long bytes)
+    {
+        string[] sizes = { "B", "KB", "MB", "GB", "TB" };
+        double len = bytes;
+        int order = 0;
+        while (len >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            len = len / 1024;
+        }
+        return $"{len:0.##} {sizes[order]}";
+    }
+}

@@ -1,0 +1,226 @@
+@page "/statistics"
+@using ForgeFusion.Fileprocessing.Web.Services
+@inject IFileProcessingApiService ApiService
+@rendermode InteractiveServer
+
+<PageTitle>File Statistics</PageTitle>
+
+<div class="container">
+    <div class="row">
+        <div class="col-12">
+            <h1>File Statistics</h1>
+            <hr />
+        </div>
+    </div>
+
+    <div class="row mb-3">
+        <div class="col-md-4">
+            <label for="folderFilter" class="form-label">Filter by Folder</label>
+            <select @bind:get="selectedFolder" @bind:set="OnFolderChanged" class="form-select" id="folderFilter">
+                <option value="">All Folders</option>
+                <option value="in">In</option>
+                <option value="out">Out</option>
+                <option value="archive">Archive</option>
+            </select>
+        </div>
+        <div class="col-md-4 d-flex align-items-end">
+            <button class="btn btn-primary" @onclick="LoadStatistics">
+                <i class="bi bi-arrow-clockwise me-2"></i>Refresh
+            </button>
+        </div>
+    </div>
+
+    @if (isLoading)
+    {
+        <div class="text-center">
+            <div class="spinner-border" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p>Loading statistics...</p>
+        </div>
+    }
+    else if (fileTypeCounts.Any())
+    {
+        <div class="row">
+            <div class="col-lg-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>File Types Distribution</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>File Type</th>
+                                        <th>Count</th>
+                                        <th>Percentage</th>
+                                        <th>Visual</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var fileType in fileTypeCounts.OrderByDescending(ft => ft.Count))
+                                    {
+                                        var percentage = (double)fileType.Count / totalFiles * 100;
+                                        <tr>
+                                            <td>
+                                                <i class="@GetFileTypeIcon(fileType.FileType) me-2"></i>
+                                                @(string.IsNullOrEmpty(fileType.FileType) ? "Unknown" : fileType.FileType)
+                                            </td>
+                                            <td>@fileType.Count</td>
+                                            <td>@percentage.ToString("F1")%</td>
+                                            <td>
+                                                <div class="progress" style="height: 20px;">
+                                                    <div class="progress-bar @GetProgressBarColor(fileType.FileType)" 
+                                                         role="progressbar" 
+                                                         style="width: @percentage.ToString("F1")%">
+                                                        @if (percentage > 15)
+                                                        {
+                                                            <text>@percentage.ToString("F1")%</text>
+                                                        }
+                                                    </div>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Summary</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row text-center">
+                            <div class="col-12 mb-3">
+                                <div class="border rounded p-3">
+                                    <h2 class="text-primary">@totalFiles</h2>
+                                    <small class="text-muted">Total Files</small>
+                                </div>
+                            </div>
+                            <div class="col-12 mb-3">
+                                <div class="border rounded p-3">
+                                    <h4 class="text-success">@fileTypeCounts.Count</h4>
+                                    <small class="text-muted">File Types</small>
+                                </div>
+                            </div>
+                            @if (!string.IsNullOrEmpty(selectedFolder))
+                            {
+                                <div class="col-12">
+                                    <div class="border rounded p-3">
+                                        <h5 class="text-info">@selectedFolder</h5>
+                                        <small class="text-muted">Current Folder</small>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                @if (fileTypeCounts.Any())
+                {
+                    <div class="card mt-3">
+                        <div class="card-header">
+                            <h6>Top File Types</h6>
+                        </div>
+                        <div class="card-body">
+                            @foreach (var fileType in fileTypeCounts.OrderByDescending(ft => ft.Count).Take(5))
+                            {
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <div>
+                                        <i class="@GetFileTypeIcon(fileType.FileType) me-2"></i>
+                                        <span>@(string.IsNullOrEmpty(fileType.FileType) ? "Unknown" : fileType.FileType)</span>
+                                    </div>
+                                    <span class="badge bg-primary">@fileType.Count</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="text-center">
+            <i class="bi bi-bar-chart display-1 text-muted"></i>
+            <h3>No data available</h3>
+            <p class="text-muted">Upload some files to see statistics.</p>
+        </div>
+    }
+</div>
+
+@code {
+    private List<Models.FileTypeCount> fileTypeCounts = new();
+    private string selectedFolder = "";
+    private bool isLoading = true;
+    private long totalFiles => fileTypeCounts.Sum(ft => ft.Count);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadStatistics();
+    }
+
+    private async Task LoadStatistics()
+    {
+        isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            fileTypeCounts = await ApiService.GetFileTypeCountsAsync(string.IsNullOrEmpty(selectedFolder) ? null : selectedFolder);
+        }
+        catch (Exception ex)
+        {
+            // Handle error
+            Console.WriteLine($"Error loading statistics: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnFolderChanged(string value)
+    {
+        selectedFolder = value;
+        await LoadStatistics();
+    }
+
+    private string GetFileTypeIcon(string fileType)
+    {
+        return fileType?.ToLower() switch
+        {
+            var ft when ft.Contains("image") => "bi bi-file-image",
+            var ft when ft.Contains("pdf") => "bi bi-file-pdf",
+            var ft when ft.Contains("word") => "bi bi-file-word",
+            var ft when ft.Contains("excel") => "bi bi-file-excel",
+            var ft when ft.Contains("video") => "bi bi-file-play",
+            var ft when ft.Contains("audio") => "bi bi-file-music",
+            var ft when ft.Contains("text") => "bi bi-file-text",
+            var ft when ft.Contains("zip") => "bi bi-file-zip",
+            _ => "bi bi-file-earmark"
+        };
+    }
+
+    private string GetProgressBarColor(string fileType)
+    {
+        return fileType?.ToLower() switch
+        {
+            var ft when ft.Contains("image") => "bg-success",
+            var ft when ft.Contains("pdf") => "bg-danger",
+            var ft when ft.Contains("word") => "bg-primary",
+            var ft when ft.Contains("excel") => "bg-success",
+            var ft when ft.Contains("video") => "bg-warning",
+            var ft when ft.Contains("audio") => "bg-info",
+            var ft when ft.Contains("text") => "bg-secondary",
+            _ => "bg-primary"
+        };
+    }
+}
