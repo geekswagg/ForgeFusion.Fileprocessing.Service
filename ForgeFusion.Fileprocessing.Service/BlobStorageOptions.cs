@@ -18,4 +18,7 @@ public class BlobStorageOptions
     // Optional file validation configuration
     public string[]? AllowedContentTypes { get; set; }
     public string[]? AllowedExtensions { get; set; }
+    
+    // Optional file size limit in bytes (null means no limit beyond server limits)
+    public long? MaxFileSize { get; set; }
 }

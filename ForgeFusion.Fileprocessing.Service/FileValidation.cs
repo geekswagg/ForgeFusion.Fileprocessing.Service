@@ -21,5 +21,9 @@ public static class FileValidation
         {
             throw new ValidationException("Empty files are not allowed.");
         }
+        if (options.MaxFileSize.HasValue && length > options.MaxFileSize.Value)
+        {
+            throw new ValidationException($"File size ({length:N0} bytes) exceeds the maximum allowed size ({options.MaxFileSize.Value:N0} bytes).");
+        }
     }
 }
