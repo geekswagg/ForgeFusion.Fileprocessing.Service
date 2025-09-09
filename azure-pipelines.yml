@@ -1,0 +1,173 @@
+trigger:
+- main
+- develop
+
+variables:
+  buildConfiguration: 'Release'
+  dotNetFramework: 'net9.0'
+  dotNetVersion: '9.0.x'
+  vmImageName: 'ubuntu-latest'
+
+stages:
+- stage: Build
+  displayName: 'Build and Test'
+  jobs:
+  - job: Build
+    displayName: 'Build and Test Job'
+    pool:
+      vmImage: $(vmImageName)
+    
+    steps:
+    - task: UseDotNet@2
+      displayName: 'Use .NET 9 SDK'
+      inputs:
+        packageType: 'sdk'
+        version: $(dotNetVersion)
+        includePreviewVersions: false
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Restore packages'
+      inputs:
+        command: 'restore'
+        projects: '**/*.csproj'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Build solution'
+      inputs:
+        command: 'build'
+        projects: '**/*.csproj'
+        arguments: '--configuration $(buildConfiguration) --no-restore'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Run unit tests'
+      inputs:
+        command: 'test'
+        projects: '**/*Tests.csproj'
+        arguments: '--configuration $(buildConfiguration) --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory $(Agent.TempDirectory)/TestResults'
+
+    - task: PublishCodeCoverageResults@1
+      displayName: 'Publish code coverage'
+      inputs:
+        codeCoverageTool: 'Cobertura'
+        summaryFileLocation: '$(Agent.TempDirectory)/TestResults/**/coverage.cobertura.xml'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish API'
+      inputs:
+        command: 'publish'
+        publishWebProjects: false
+        projects: 'ForgeFusion.Fileprocessing.Api/ForgeFusion.Fileprocessing.Api.csproj'
+        arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/api'
+        zipAfterPublish: true
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish Web'
+      inputs:
+        command: 'publish'
+        publishWebProjects: false
+        projects: 'ForgeFusion.Fileprocessing.Web/ForgeFusion.Fileprocessing.Web.csproj'
+        arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/web'
+        zipAfterPublish: true
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish artifacts'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
+
+- stage: DeployDev
+  displayName: 'Deploy to Development'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+  jobs:
+  - deployment: DeployDev
+    displayName: 'Deploy to Development Environment'
+    pool:
+      vmImage: $(vmImageName)
+    environment: 'development'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureRmWebAppDeployment@4
+            displayName: 'Deploy API to Development'
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: '$(azureSubscription)'
+              appType: 'webApp'
+              WebAppName: '$(devApiAppName)'
+              packageForLinux: '$(Pipeline.Workspace)/drop/api/*.zip'
+              AppSettings: |
+                -Storage__ConnectionString "$(devStorageConnectionString)"
+                -Storage__ContainerName "files-dev"
+                -Storage__QueueName "file-uploads-dev"
+                -Storage__TableName "fileProcessingDev"
+                -Storage__AuditTableName "fileAuditDev"
+
+          - task: AzureRmWebAppDeployment@4
+            displayName: 'Deploy Web to Development'
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: '$(azureSubscription)'
+              appType: 'webApp'
+              WebAppName: '$(devWebAppName)'
+              packageForLinux: '$(Pipeline.Workspace)/drop/web/*.zip'
+              AppSettings: |
+                -FileProcessingApi__BaseUrl "https://$(devApiAppName).azurewebsites.net"
+
+- stage: DeployProd
+  displayName: 'Deploy to Production'
+  dependsOn: Build
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+  - deployment: DeployProd
+    displayName: 'Deploy to Production Environment'
+    pool:
+      vmImage: $(vmImageName)
+    environment: 'production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureRmWebAppDeployment@4
+            displayName: 'Deploy API to Production'
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: '$(azureSubscription)'
+              appType: 'webApp'
+              WebAppName: '$(prodApiAppName)'
+              packageForLinux: '$(Pipeline.Workspace)/drop/api/*.zip'
+              AppSettings: |
+                -Storage__ConnectionString "$(prodStorageConnectionString)"
+                -Storage__ContainerName "files"
+                -Storage__QueueName "file-uploads"
+                -Storage__TableName "fileProcessing"
+                -Storage__AuditTableName "fileAudit"
+                -Storage__MaxFileSize "209715200"
+
+          - task: AzureRmWebAppDeployment@4
+            displayName: 'Deploy Web to Production'
+            inputs:
+              ConnectionType: 'AzureRM'
+              azureSubscription: '$(azureSubscription)'
+              appType: 'webApp'
+              WebAppName: '$(prodWebAppName)'
+              packageForLinux: '$(Pipeline.Workspace)/drop/web/*.zip'
+              AppSettings: |
+                -FileProcessingApi__BaseUrl "https://$(prodApiAppName).azurewebsites.net"
+
+          - task: AzureCLI@2
+            displayName: 'Warm up applications'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "Warming up API..."
+                curl -f "https://$(prodApiAppName).azurewebsites.net/api/files" || echo "API warmup failed"
+                
+                echo "Warming up Web..."
+                curl -f "https://$(prodWebAppName).azurewebsites.net" || echo "Web warmup failed"
+                
+                echo "Applications warmed up successfully"

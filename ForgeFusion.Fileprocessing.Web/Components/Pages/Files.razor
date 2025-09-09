@@ -1,0 +1,313 @@
+@page "/files"
+@using ForgeFusion.Fileprocessing.Web.Services
+@inject IFileProcessingApiService ApiService
+@inject IJSRuntime JSRuntime
+@rendermode InteractiveServer
+
+<PageTitle>File Browser</PageTitle>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <h1>File Browser</h1>
+            <hr />
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    @errorMessage
+                    <button type="button" class="btn-close" @onclick="ClearError" aria-label="Close"></button>
+                </div>
+            </div>
+        </div>
+    }
+
+    <div class="row mb-3">
+        <div class="col-md-4">
+            <label for="folderFilter" class="form-label">Filter by Folder</label>
+            <select @bind:get="selectedFolder" @bind:set="OnFolderChanged" class="form-select" id="folderFilter">
+                <option value="">All Folders</option>
+                <option value="in">In</option>
+                <option value="out">Out</option>
+                <option value="archive">Archive</option>
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label for="searchFilter" class="form-label">Search Files</label>
+            <input @bind="searchTerm" @onkeyup="FilterFiles" type="text" class="form-control" id="searchFilter" placeholder="Search by filename..." />
+        </div>
+        <div class="col-md-4 d-flex align-items-end">
+            <button class="btn btn-primary" @onclick="LoadFiles">
+                <i class="bi bi-arrow-clockwise me-2"></i>Refresh
+            </button>
+        </div>
+    </div>
+
+    @if (isLoading)
+    {
+        <div class="text-center">
+            <div class="spinner-border" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p>Loading files...</p>
+        </div>
+    }
+    else if (filteredFiles.Any())
+    {
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5>Files (@filteredFiles.Count)</h5>
+                        <div>
+                            <small class="text-muted">Total Size: @FormatFileSize(filteredFiles.Sum(f => f.ContentLength))</small>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover mb-0">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th @onclick="() => SortFiles(nameof(Models.FileItem.Name))" style="cursor: pointer;">
+                                            Name @GetSortIcon(nameof(Models.FileItem.Name))
+                                        </th>
+                                        <th @onclick="() => SortFiles(nameof(Models.FileItem.Folder))" style="cursor: pointer;">
+                                            Folder @GetSortIcon(nameof(Models.FileItem.Folder))
+                                        </th>
+                                        <th @onclick="() => SortFiles(nameof(Models.FileItem.ContentLength))" style="cursor: pointer;">
+                                            Size @GetSortIcon(nameof(Models.FileItem.ContentLength))
+                                        </th>
+                                        <th>Type</th>
+                                        <th @onclick="() => SortFiles(nameof(Models.FileItem.LastModified))" style="cursor: pointer;">
+                                            Last Modified @GetSortIcon(nameof(Models.FileItem.LastModified))
+                                        </th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var file in filteredFiles)
+                                    {
+                                        <tr>
+                                            <td>
+                                                <i class="@GetFileIcon(file.ContentType) me-2"></i>
+                                                @file.Name
+                                            </td>
+                                            <td><span class="badge bg-secondary">@file.Folder</span></td>
+                                            <td>@FormatFileSize(file.ContentLength)</td>
+                                            <td>@file.ContentType</td>
+                                            <td>@file.LastModified.ToString("yyyy-MM-dd HH:mm")</td>
+                                            <td>
+                                                <div class="btn-group btn-group-sm" role="group">
+                                                    <button class="btn btn-outline-primary" @onclick="() => DownloadFile(file)">
+                                                        <i class="bi bi-download"></i>
+                                                    </button>
+                                                    <button class="btn btn-outline-warning" @onclick="() => ArchiveFile(file)">
+                                                        <i class="bi bi-archive"></i>
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="text-center">
+            <i class="bi bi-folder2-open display-1 text-muted"></i>
+            <h3>No files found</h3>
+            <p class="text-muted">Try adjusting your filters or upload some files.</p>
+        </div>
+    }
+</div>
+
+@code {
+    private List<Models.FileItem> allFiles = new();
+    private List<Models.FileItem> filteredFiles = new();
+    private string selectedFolder = "";
+    private string searchTerm = "";
+    private bool isLoading = true;
+    private string currentSortColumn = nameof(Models.FileItem.LastModified);
+    private bool sortAscending = false;
+    private bool jsRuntimeAvailable = false;
+    private string errorMessage = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadFiles();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            jsRuntimeAvailable = true;
+        }
+        await base.OnAfterRenderAsync(firstRender);
+    }
+
+    private async Task OnFolderChanged(string value)
+    {
+        selectedFolder = value;
+        await LoadFiles();
+    }
+
+    private async Task LoadFiles()
+    {
+        isLoading = true;
+        errorMessage = "";
+        StateHasChanged();
+
+        try
+        {
+            allFiles = await ApiService.GetFilesAsync(string.IsNullOrEmpty(selectedFolder) ? null : selectedFolder);
+            FilterFiles();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error loading files: {ex.Message}";
+            if (jsRuntimeAvailable)
+            {
+                await JSRuntime.InvokeVoidAsync("alert", errorMessage);
+            }
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ClearError()
+    {
+        errorMessage = "";
+        StateHasChanged();
+    }
+
+    private void FilterFiles()
+    {
+        filteredFiles = allFiles.Where(f =>
+            (string.IsNullOrEmpty(selectedFolder) || f.Folder.Equals(selectedFolder, StringComparison.OrdinalIgnoreCase)) &&
+            (string.IsNullOrEmpty(searchTerm) || f.Name.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        SortFilesByCurrentColumn();
+        StateHasChanged();
+    }
+
+    private void SortFiles(string column)
+    {
+        if (currentSortColumn == column)
+        {
+            sortAscending = !sortAscending;
+        }
+        else
+        {
+            currentSortColumn = column;
+            sortAscending = true;
+        }
+
+        SortFilesByCurrentColumn();
+    }
+
+    private void SortFilesByCurrentColumn()
+    {
+        filteredFiles = currentSortColumn switch
+        {
+            nameof(Models.FileItem.Name) => sortAscending ? filteredFiles.OrderBy(f => f.Name).ToList() : filteredFiles.OrderByDescending(f => f.Name).ToList(),
+            nameof(Models.FileItem.Folder) => sortAscending ? filteredFiles.OrderBy(f => f.Folder).ToList() : filteredFiles.OrderByDescending(f => f.Folder).ToList(),
+            nameof(Models.FileItem.ContentLength) => sortAscending ? filteredFiles.OrderBy(f => f.ContentLength).ToList() : filteredFiles.OrderByDescending(f => f.ContentLength).ToList(),
+            nameof(Models.FileItem.LastModified) => sortAscending ? filteredFiles.OrderBy(f => f.LastModified).ToList() : filteredFiles.OrderByDescending(f => f.LastModified).ToList(),
+            _ => filteredFiles
+        };
+    }
+
+    private string GetSortIcon(string column)
+    {
+        if (currentSortColumn != column) return "";
+        return sortAscending ? "?" : "?";
+    }
+
+    private async Task DownloadFile(Models.FileItem file)
+    {
+        if (!jsRuntimeAvailable) return;
+        
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("downloadFile", $"/api/files/download/{Uri.EscapeDataString(file.Name)}?folder={Uri.EscapeDataString(file.Folder)}", file.Name);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error downloading file: {ex.Message}";
+            StateHasChanged();
+        }
+    }
+
+    private async Task ArchiveFile(Models.FileItem file)
+    {
+        if (!jsRuntimeAvailable) return;
+        
+        try
+        {
+            var confirmed = await JSRuntime.InvokeAsync<bool>("confirm", $"Are you sure you want to archive '{file.Name}'?");
+            if (!confirmed) return;
+
+            var success = await ApiService.ArchiveFileAsync(file.Name, file.Folder);
+            if (success)
+            {
+                await JSRuntime.InvokeVoidAsync("alert", $"'{file.Name}' has been archived successfully.");
+                await LoadFiles();
+            }
+            else
+            {
+                errorMessage = $"Failed to archive '{file.Name}'.";
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error archiving file: {ex.Message}";
+            StateHasChanged();
+        }
+    }
+
+    private string FormatFileSize(long bytes)
+    {
+        string[] sizes = { "B", "KB", "MB", "GB", "TB" };
+        double len = bytes;
+        int order = 0;
+        while (len >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            len = len / 1024;
+        }
+        return $"{len:0.##} {sizes[order]}";
+    }
+
+    private string GetFileIcon(string contentType)
+    {
+        return contentType.ToLower() switch
+        {
+            var ct when ct.StartsWith("image/") => "bi bi-file-image",
+            var ct when ct.StartsWith("video/") => "bi bi-file-play",
+            var ct when ct.StartsWith("audio/") => "bi bi-file-music",
+            var ct when ct.Contains("pdf") => "bi bi-file-pdf",
+            var ct when ct.Contains("word") => "bi bi-file-word",
+            var ct when ct.Contains("excel") || ct.Contains("spreadsheet") => "bi bi-file-excel",
+            var ct when ct.Contains("powerpoint") || ct.Contains("presentation") => "bi bi-file-ppt",
+            var ct when ct.StartsWith("text/") => "bi bi-file-text",
+            var ct when ct.Contains("zip") || ct.Contains("archive") => "bi bi-file-zip",
+            _ => "bi bi-file-earmark"
+        };
+    }
+}

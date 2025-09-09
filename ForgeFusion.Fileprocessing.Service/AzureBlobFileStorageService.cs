@@ -15,6 +15,12 @@ public interface IFileStorageService
     Task<string> ArchiveAsync(string blobName, string? fromFolder = null, string? correlationId = null, string? comment = null, CancellationToken cancellationToken = default);
 
     Task UpdateStatusAsync(string blobName, FileProcessingStatus status, string? folder = null, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<FileTypeCount>> GetFileTypeCountsAsync(string? folder = null, CancellationToken cancellationToken = default);
+
+    // New list and audit APIs
+    IAsyncEnumerable<ForgeFusion.Fileprocessing.Service.Models.FileItem> ListFilesAsync(string? folder = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<FileAuditEntity>> GetAuditAsync(string? blobName = null, string? folder = null, int? take = null, CancellationToken cancellationToken = default);
 }
 
 public class AzureBlobFileStorageService : IFileStorageService
@@ -192,8 +198,100 @@ public class AzureBlobFileStorageService : IFileStorageService
         }
     }
 
+    public async Task<IReadOnlyList<FileTypeCount>> GetFileTypeCountsAsync(string? folder = null, CancellationToken cancellationToken = default)
+    {
+        await EnsureResourcesAsync(cancellationToken).ConfigureAwait(false);
+
+        var results = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+        await foreach (var page in _container.GetBlobsAsync(prefix: string.IsNullOrWhiteSpace(folder) ? null : folder.TrimEnd('/') + "/").AsPages())
+        {
+            foreach (var item in page.Values)
+            {
+                // get extension from name (after last '.')
+                var name = item.Name;
+                var ext = Path.GetExtension(name);
+                var key = string.IsNullOrWhiteSpace(ext) ? "(none)" : ext.TrimStart('.');
+                results[key] = results.TryGetValue(key, out var c) ? c + 1 : 1;
+            }
+        }
+
+        return results.Select(kvp => new FileTypeCount { FileType = kvp.Key, Count = kvp.Value }).OrderByDescending(x => x.Count).ThenBy(x => x.FileType, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public async IAsyncEnumerable<FileItem> ListFilesAsync(string? folder = null, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await EnsureResourcesAsync(cancellationToken).ConfigureAwait(false);
+        var prefix = string.IsNullOrWhiteSpace(folder) ? null : folder!.TrimEnd('/') + "/";
+        var pages = _container.GetBlobsAsync(prefix: prefix).AsPages();
+        await foreach (var page in pages.WithCancellation(cancellationToken))
+        {
+            foreach (var item in page.Values)
+            {
+                yield return new FileItem
+                {
+                    Name = Path.GetFileName(item.Name),
+                    Folder = GetFolderFromName(item.Name),
+                    ContentLength = item.Properties.ContentLength ?? 0,
+                    ContentType = item.Properties.ContentType ?? "",
+                    LastModified = item.Properties.LastModified ?? DateTimeOffset.MinValue
+                };
+            }
+        }
+    }
+
+    public async Task<IReadOnlyList<FileAuditEntity>> GetAuditAsync(string? blobName = null, string? folder = null, int? take = null, CancellationToken cancellationToken = default)
+    {
+        await EnsureResourcesAsync(cancellationToken).ConfigureAwait(false);
+
+        // Build query using SDK filter support
+        var filter = new List<string>();
+        if (!string.IsNullOrWhiteSpace(blobName))
+        {
+            // exact match on stored blob path (may include folder prefix). If only name provided and folder provided, combine
+            var name = string.IsNullOrWhiteSpace(folder) ? blobName! : Combine(folder!, blobName!);
+            filter.Add($"BlobName eq '{name.Replace("'", "''")}'");
+        }
+        if (!string.IsNullOrWhiteSpace(folder) && string.IsNullOrWhiteSpace(blobName))
+        {
+            // filter by prefix is not supported directly in OData for Table, so retrieve and filter client-side
+        }
+
+        var results = new List<FileAuditEntity>();
+        if (filter.Count > 0)
+        {
+            await foreach (var entity in _auditTable.QueryAsync<FileAuditEntity>(filter: string.Join(" and ", filter), cancellationToken: cancellationToken))
+            {
+                results.Add(entity);
+                if (take is int t && results.Count >= t) break;
+            }
+        }
+        else
+        {
+            await foreach (var entity in _auditTable.QueryAsync<FileAuditEntity>(e => e.PartitionKey == "fileAudit", cancellationToken: cancellationToken))
+            {
+                if (!string.IsNullOrWhiteSpace(folder))
+                {
+                    if (!string.Equals(entity.Folder, folder, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                }
+                results.Add(entity);
+                if (take is int t && results.Count >= t) break;
+            }
+        }
+
+        // Order by timestamp desc
+        return results.OrderByDescending(e => e.Timestamp).ToList();
+    }
+
     private static string Combine(string folder, string fileName)
         => string.IsNullOrWhiteSpace(folder) ? fileName : folder.TrimEnd('/') + "/" + fileName;
+
+    private static string GetFolderFromName(string fullName)
+    {
+        var idx = fullName.IndexOf('/');
+        return idx > 0 ? fullName.Substring(0, idx) : string.Empty;
+    }
 
     private string InferFolderFromStatus(FileProcessingStatus status) => status switch
     {

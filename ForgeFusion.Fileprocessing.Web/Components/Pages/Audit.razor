@@ -1,0 +1,243 @@
+@page "/audit"
+@using ForgeFusion.Fileprocessing.Web.Services
+@inject IFileProcessingApiService ApiService
+@rendermode InteractiveServer
+
+<PageTitle>Audit History</PageTitle>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <h1>Audit History</h1>
+            <hr />
+        </div>
+    </div>
+
+    <div class="row mb-3">
+        <div class="col-md-3">
+            <label for="blobNameFilter" class="form-label">File Name</label>
+            <input @bind="blobNameFilter" type="text" class="form-control" id="blobNameFilter" placeholder="Filter by file name..." />
+        </div>
+        <div class="col-md-3">
+            <label for="folderFilter" class="form-label">Folder</label>
+            <select @bind="folderFilter" class="form-select" id="folderFilter">
+                <option value="">All Folders</option>
+                <option value="in">In</option>
+                <option value="out">Out</option>
+                <option value="archive">Archive</option>
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label for="takeFilter" class="form-label">Records to Show</label>
+            <select @bind="takeFilter" class="form-select" id="takeFilter">
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="250">250</option>
+                <option value="500">500</option>
+            </select>
+        </div>
+        <div class="col-md-3 d-flex align-items-end">
+            <button class="btn btn-primary me-2" @onclick="LoadAuditHistory">
+                <i class="bi bi-search me-2"></i>Search
+            </button>
+            <button class="btn btn-secondary" @onclick="ClearFilters">
+                <i class="bi bi-x-circle me-2"></i>Clear
+            </button>
+        </div>
+    </div>
+
+    @if (isLoading)
+    {
+        <div class="text-center">
+            <div class="spinner-border" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p>Loading audit history...</p>
+        </div>
+    }
+    else if (auditEntries.Any())
+    {
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5>Audit Entries (@auditEntries.Count)</h5>
+                        <small class="text-muted">Showing recent activity</small>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover table-sm mb-0">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>File Name</th>
+                                        <th>Folder</th>
+                                        <th>Action</th>
+                                        <th>Status</th>
+                                        <th>Size</th>
+                                        <th>Type</th>
+                                        <th>Comment</th>
+                                        <th>Correlation ID</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var entry in auditEntries.OrderByDescending(e => e.Timestamp))
+                                    {
+                                        <tr>
+                                            <td>
+                                                <small>@entry.Timestamp?.ToString("yyyy-MM-dd")</small><br>
+                                                <small class="text-muted">@entry.Timestamp?.ToString("HH:mm:ss")</small>
+                                            </td>
+                                            <td>
+                                                <i class="@GetFileIcon(entry.ContentType) me-1"></i>
+                                                @entry.FileName
+                                            </td>
+                                            <td>
+                                                @if (!string.IsNullOrEmpty(entry.Folder))
+                                                {
+                                                    <span class="badge bg-secondary">@entry.Folder</span>
+                                                }
+                                            </td>
+                                            <td><span class="badge @GetActionBadgeClass(entry.Action)">@entry.Action</span></td>
+                                            <td><span class="badge @GetStatusBadgeClass(entry.Status)">@entry.Status</span></td>
+                                            <td>@FormatFileSize(entry.ContentLength)</td>
+                                            <td>
+                                                <small>@entry.ContentType</small>
+                                            </td>
+                                            <td>
+                                                @if (!string.IsNullOrEmpty(entry.Comment))
+                                                {
+                                                    <small title="@entry.Comment">@TruncateString(entry.Comment, 30)</small>
+                                                }
+                                            </td>
+                                            <td>
+                                                @if (!string.IsNullOrEmpty(entry.CorrelationId))
+                                                {
+                                                    <small><code>@TruncateString(entry.CorrelationId, 15)</code></small>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="text-center">
+            <i class="bi bi-clock-history display-1 text-muted"></i>
+            <h3>No audit entries found</h3>
+            <p class="text-muted">Try adjusting your filters or check if there's any file activity.</p>
+        </div>
+    }
+</div>
+
+@code {
+    private List<Models.FileAuditEntity> auditEntries = new();
+    private string blobNameFilter = "";
+    private string folderFilter = "";
+    private int takeFilter = 100;
+    private bool isLoading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAuditHistory();
+    }
+
+    private async Task LoadAuditHistory()
+    {
+        isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var blobName = string.IsNullOrWhiteSpace(blobNameFilter) ? null : blobNameFilter;
+            var folder = string.IsNullOrWhiteSpace(folderFilter) ? null : folderFilter;
+            
+            auditEntries = await ApiService.GetAuditHistoryAsync(blobName, folder, takeFilter);
+        }
+        catch (Exception ex)
+        {
+            // Handle error
+            Console.WriteLine($"Error loading audit history: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ClearFilters()
+    {
+        blobNameFilter = "";
+        folderFilter = "";
+        takeFilter = 100;
+        await LoadAuditHistory();
+    }
+
+    private string GetActionBadgeClass(Models.FileActionType action)
+    {
+        return action switch
+        {
+            Models.FileActionType.Upload => "bg-success",
+            Models.FileActionType.Download => "bg-primary",
+            Models.FileActionType.Archive => "bg-warning",
+            Models.FileActionType.Delete => "bg-danger",
+            _ => "bg-secondary"
+        };
+    }
+
+    private string GetStatusBadgeClass(Models.FileProcessingStatus status)
+    {
+        return status switch
+        {
+            Models.FileProcessingStatus.Initial => "bg-secondary",
+            Models.FileProcessingStatus.Uploaded => "bg-info",
+            Models.FileProcessingStatus.Processing => "bg-warning",
+            Models.FileProcessingStatus.Processed => "bg-success",
+            Models.FileProcessingStatus.Archived => "bg-dark",
+            _ => "bg-secondary"
+        };
+    }
+
+    private string GetFileIcon(string? contentType)
+    {
+        return contentType?.ToLower() switch
+        {
+            var ct when ct.StartsWith("image/") => "bi bi-file-image",
+            var ct when ct.StartsWith("video/") => "bi bi-file-play",
+            var ct when ct.StartsWith("audio/") => "bi bi-file-music",
+            var ct when ct.Contains("pdf") => "bi bi-file-pdf",
+            var ct when ct.Contains("word") => "bi bi-file-word",
+            var ct when ct.Contains("excel") => "bi bi-file-excel",
+            var ct when ct.StartsWith("text/") => "bi bi-file-text",
+            _ => "bi bi-file-earmark"
+        };
+    }
+
+    private string FormatFileSize(long bytes)
+    {
+        if (bytes == 0) return "0 B";
+        string[] sizes = { "B", "KB", "MB", "GB", "TB" };
+        double len = bytes;
+        int order = 0;
+        while (len >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            len = len / 1024;
+        }
+        return $"{len:0.##} {sizes[order]}";
+    }
+
+    private string TruncateString(string input, int maxLength)
+    {
+        if (string.IsNullOrEmpty(input) || input.Length <= maxLength)
+            return input;
+        return input[..maxLength] + "...";
+    }
+}

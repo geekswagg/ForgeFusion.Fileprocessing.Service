@@ -1,0 +1,298 @@
+@page "/upload"
+@using ForgeFusion.Fileprocessing.Web.Services
+@inject IFileProcessingApiService ApiService
+@inject IJSRuntime JSRuntime
+@rendermode InteractiveServer
+
+<PageTitle>Upload Files</PageTitle>
+
+<div class="container">
+    <div class="row">
+        <div class="col-12">
+            <h1>Upload Files</h1>
+            <hr />
+        </div>
+    </div>
+
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="alert alert-warning alert-dismissible fade show" role="alert">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    @errorMessage
+                    <button type="button" class="btn-close" @onclick="ClearError" aria-label="Close"></button>
+                </div>
+            </div>
+        </div>
+    }
+
+    <div class="row">
+        <div class="col-md-8">
+            <EditForm Model="uploadModel" OnValidSubmit="HandleUpload">
+                <DataAnnotationsValidator />
+                <ValidationSummary class="text-danger" />
+
+                <div class="mb-3">
+                    <label class="form-label">Select Files</label>
+                    <InputFile OnChange="OnFileSelected" multiple class="form-control" accept=".pdf,.png,.jpg,.jpeg,.csv,.txt,.gif,.bmp,.zip,.html,.htm,.json,.xml" />
+                    <div class="form-text">
+                        Select one or more files to upload. Maximum size: 200MB per file.<br>
+                        <small class="text-muted">Allowed types: PDF, Images (PNG, JPG, JPEG, GIF, BMP), Text files (TXT, CSV, HTML, JSON, XML), ZIP archives</small>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label for="folder" class="form-label">Folder</label>
+                    <select @bind="uploadModel.Folder" class="form-select" id="folder">
+                        <option value="in">In</option>
+                        <option value="out">Out</option>
+                        <option value="archive">Archive</option>
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <label for="comment" class="form-label">Comment (Optional)</label>
+                    <textarea @bind="uploadModel.Comment" class="form-control" id="comment" rows="3" placeholder="Add a comment about this upload..."></textarea>
+                </div>
+
+                <div class="mb-3">
+                    <label for="correlationId" class="form-label">Correlation ID (Optional)</label>
+                    <input @bind="uploadModel.CorrelationId" type="text" class="form-control" id="correlationId" placeholder="Enter correlation ID for tracking..." />
+                </div>
+
+                <button type="submit" class="btn btn-primary" disabled="@isUploading">
+                    @if (isUploading)
+                    {
+                        <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                        <text>Uploading...</text>
+                    }
+                    else
+                    {
+                        <i class="bi bi-cloud-upload me-2"></i>
+                        <text>Upload Files</text>
+                    }
+                </button>
+            </EditForm>
+        </div>
+
+        <div class="col-md-4">
+            @if (selectedFiles.Any())
+            {
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Selected Files (@selectedFiles.Count)</h5>
+                    </div>
+                    <div class="card-body">
+                        @foreach (var file in selectedFiles)
+                        {
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <div>
+                                    <small class="text-muted">@file.Name</small><br>
+                                    <small class="text-muted">@FormatFileSize(file.Size)</small>
+                                </div>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveFile(file)">
+                                    <i class="bi bi-x"></i>
+                                </button>
+                            </div>
+                        }
+                        <hr>
+                        <strong>Total: @FormatFileSize(selectedFiles.Sum(f => f.Size))</strong>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    @if (uploadResults.Any())
+    {
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Upload Results</h5>
+                    </div>
+                    <div class="card-body">
+                        @foreach (var result in uploadResults)
+                        {
+                            <div class="alert @(result.Success ? "alert-success" : "alert-danger")" role="alert">
+                                <strong>@result.FileName:</strong> @result.Message
+                                @if (result.Success)
+                                {
+                                    <i class="bi bi-check-circle float-end"></i>
+                                }
+                                else
+                                {
+                                    <i class="bi bi-x-circle float-end"></i>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private UploadModel uploadModel = new();
+    private List<SelectedFile> selectedFiles = new();
+    private List<UploadResult> uploadResults = new();
+    private bool isUploading = false;
+    private bool jsRuntimeAvailable = false;
+    private string errorMessage = "";
+
+    private class UploadModel
+    {
+        public string Folder { get; set; } = "in";
+        public string? Comment { get; set; }
+        public string? CorrelationId { get; set; }
+    }
+
+    private class SelectedFile
+    {
+        public string Name { get; set; } = string.Empty;
+        public long Size { get; set; }
+        public IBrowserFile BrowserFile { get; set; } = null!;
+    }
+
+    private class UploadResult
+    {
+        public string FileName { get; set; } = string.Empty;
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            jsRuntimeAvailable = true;
+        }
+        await base.OnAfterRenderAsync(firstRender);
+    }
+
+    private void ClearError()
+    {
+        errorMessage = "";
+        StateHasChanged();
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedFiles.Clear();
+        foreach (var file in e.GetMultipleFiles(10)) // Max 10 files
+        {
+            selectedFiles.Add(new SelectedFile
+            {
+                Name = file.Name,
+                Size = file.Size,
+                BrowserFile = file
+            });
+        }
+        StateHasChanged();
+    }
+
+    private void RemoveFile(SelectedFile file)
+    {
+        selectedFiles.Remove(file);
+        StateHasChanged();
+    }
+
+    private async Task HandleUpload()
+    {
+        if (!selectedFiles.Any())
+        {
+            errorMessage = "Please select at least one file to upload.";
+            if (jsRuntimeAvailable)
+            {
+                await JSRuntime.InvokeVoidAsync("alert", errorMessage);
+            }
+            StateHasChanged();
+            return;
+        }
+
+        isUploading = true;
+        uploadResults.Clear();
+        errorMessage = "";
+        StateHasChanged();
+
+        // Use a cancellation token for better control
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+
+        foreach (var file in selectedFiles)
+        {
+            try
+            {
+                // Force UI update before each file upload
+                await InvokeAsync(StateHasChanged);
+                await Task.Delay(50, cts.Token); // Small delay to ensure UI updates
+
+                using var stream = file.BrowserFile.OpenReadStream(maxAllowedSize: 200 * 1024 * 1024); // 200MB max
+                var blobName = await ApiService.UploadFileAsync(
+                    stream,
+                    file.Name,
+                    uploadModel.Folder,
+                    uploadModel.Comment,
+                    uploadModel.CorrelationId,
+                    cts.Token
+                );
+
+                uploadResults.Add(new UploadResult
+                {
+                    FileName = file.Name,
+                    Success = true,
+                    Message = $"Successfully uploaded as {blobName}"
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                uploadResults.Add(new UploadResult
+                {
+                    FileName = file.Name,
+                    Success = false,
+                    Message = "Upload was cancelled or timed out"
+                });
+                break; // Stop processing remaining files
+            }
+            catch (HttpRequestException httpEx)
+            {
+                uploadResults.Add(new UploadResult
+                {
+                    FileName = file.Name,
+                    Success = false,
+                    Message = $"Connection error: {httpEx.Message}. Please check if the API is running."
+                });
+            }
+            catch (Exception ex)
+            {
+                uploadResults.Add(new UploadResult
+                {
+                    FileName = file.Name,
+                    Success = false,
+                    Message = $"Upload failed: {ex.Message}"
+                });
+            }
+
+            // Update UI after each file
+            await InvokeAsync(StateHasChanged);
+        }
+
+        isUploading = false;
+        selectedFiles.Clear();
+        StateHasChanged();
+    }
+
+    private string FormatFileSize(long bytes)
+    {
+        string[] sizes = { "B", "KB", "MB", "GB", "TB" };
+        double len = bytes;
+        int order = 0;
+        while (len >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            len = len / 1024;
+        }
+        return $"{len:0.##} {sizes[order]}";
+    }
+}
