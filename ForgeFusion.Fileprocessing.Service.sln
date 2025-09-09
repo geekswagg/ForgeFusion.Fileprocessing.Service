@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ForgeFusion.Fileprocessing.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ForgeFusion.Fileprocessing.Tests", "ForgeFusion.Fileprocessing.Tests\ForgeFusion.Fileprocessing.Tests.csproj", "{220973F5-E074-4987-81B1-B53576EB20F8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ForgeFusion.Fileprocessing.Web", "ForgeFusion.Fileprocessing.Web\ForgeFusion.Fileprocessing.Web.csproj", "{90ED0164-FE9F-4F20-9301-1B94BCE88B46}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -55,6 +57,18 @@ Global
 		{220973F5-E074-4987-81B1-B53576EB20F8}.Release|x64.Build.0 = Release|Any CPU
 		{220973F5-E074-4987-81B1-B53576EB20F8}.Release|x86.ActiveCfg = Release|Any CPU
 		{220973F5-E074-4987-81B1-B53576EB20F8}.Release|x86.Build.0 = Release|Any CPU
+		{90ED0164-FE9F-4F20-9301-1B94BCE88B46}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{90ED0164-FE9F-4F20-9301-1B94BCE88B46}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{90ED0164-FE9F-4F20-9301-1B94BCE88B46}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{90ED0164-FE9F-4F20-9301-1B94BCE88B46}.Debug|x64.Build.0 = Debug|Any CPU
+		{90ED0164-FE9F-4F20-9301-1B94BCE88B46}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{90ED0164-FE9F-4F20-9301-1B94BCE88B46}.Debug|x86.Build.0 = Debug|Any CPU
+		{90ED0164-FE9F-4F20-9301-1B94BCE88B46}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{90ED0164-FE9F-4F20-9301-1B94BCE88B46}.Release|Any CPU.Build.0 = Release|Any CPU
+		{90ED0164-FE9F-4F20-9301-1B94BCE88B46}.Release|x64.ActiveCfg = Release|Any CPU
+		{90ED0164-FE9F-4F20-9301-1B94BCE88B46}.Release|x64.Build.0 = Release|Any CPU
+		{90ED0164-FE9F-4F20-9301-1B94BCE88B46}.Release|x86.ActiveCfg = Release|Any CPU
+		{90ED0164-FE9F-4F20-9301-1B94BCE88B46}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
