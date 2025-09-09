@@ -39,17 +39,14 @@ builder.Services.AddSingleton(options);
 builder.Services.AddSingleton<IFileStorageService, AzureBlobFileStorageService>();
 builder.Services.AddSingleton<IConsoleLogger, SpectreConsoleLogger>();
 
-// Minimal OpenAPI + Scalar UI
-builder.Services.AddOpenApi(options =>
+// Swagger/OpenAPI support for .NET 8.0
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
 {
-    options.AddDocumentTransformer((document, context, ct) =>
+    c.SwaggerDoc("v1", new OpenApiInfo
     {
-        document.Info = new OpenApiInfo
-        {
-            Title = "ForgeFusion Fileprocessing API",
-            Version = "v1"
-        };
-        return Task.CompletedTask;
+        Title = "ForgeFusion Fileprocessing API",
+        Version = "v1"
     });
 });
 
@@ -66,12 +63,15 @@ lifetime.ApplicationStopping.Register(() =>
     SpectreConsoleExtensions.WriteShutdownMessage();
 });
 
-// Expose OpenAPI document and Scalar UI
-app.MapOpenApi();
+// Expose Swagger and Scalar UI
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 app.MapScalarApiReference(options =>
 {
     options.Title = "ForgeFusion Fileprocessing API";
-    options.EndpointPathPrefix = string.Empty;
 });
 
 app.MapPost("/api/files/upload", async ([FromServices] IFileStorageService storage, [FromServices] IConsoleLogger logger, HttpRequest request, CancellationToken ct, [FromQuery] string? fileName, [FromQuery] string? folder, [FromQuery] string? comment, [FromQuery] string? correlationId) =>
