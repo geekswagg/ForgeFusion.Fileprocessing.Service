@@ -72,6 +72,7 @@ if (app.Environment.IsDevelopment())
 app.MapScalarApiReference(options =>
 {
     options.Title = "ForgeFusion Fileprocessing API";
+    options.EndpointPathPrefix = string.Empty;
 });
 
 app.MapPost("/api/files/upload", async ([FromServices] IFileStorageService storage, [FromServices] IConsoleLogger logger, HttpRequest request, CancellationToken ct, [FromQuery] string? fileName, [FromQuery] string? folder, [FromQuery] string? comment, [FromQuery] string? correlationId) =>
