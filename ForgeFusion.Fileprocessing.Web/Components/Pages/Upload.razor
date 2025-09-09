@@ -14,6 +14,19 @@
         </div>
     </div>
 
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="alert alert-warning alert-dismissible fade show" role="alert">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    @errorMessage
+                    <button type="button" class="btn-close" @onclick="ClearError" aria-label="Close"></button>
+                </div>
+            </div>
+        </div>
+    }
+
     <div class="row">
         <div class="col-md-8">
             <EditForm Model="uploadModel" OnValidSubmit="HandleUpload">
@@ -22,8 +35,11 @@
 
                 <div class="mb-3">
                     <label class="form-label">Select Files</label>
-                    <InputFile OnChange="OnFileSelected" multiple class="form-control" accept="*/*" />
-                    <div class="form-text">Select one or more files to upload. Maximum size: 200MB per file.</div>
+                    <InputFile OnChange="OnFileSelected" multiple class="form-control" accept=".pdf,.png,.jpg,.jpeg,.csv,.txt,.gif,.bmp,.zip,.html,.htm,.json,.xml" />
+                    <div class="form-text">
+                        Select one or more files to upload. Maximum size: 200MB per file.<br>
+                        <small class="text-muted">Allowed types: PDF, Images (PNG, JPG, JPEG, GIF, BMP), Text files (TXT, CSV, HTML, JSON, XML), ZIP archives</small>
+                    </div>
                 </div>
 
                 <div class="mb-3">
@@ -123,6 +139,8 @@
     private List<SelectedFile> selectedFiles = new();
     private List<UploadResult> uploadResults = new();
     private bool isUploading = false;
+    private bool jsRuntimeAvailable = false;
+    private string errorMessage = "";
 
     private class UploadModel
     {
@@ -143,6 +161,21 @@
         public string FileName { get; set; } = string.Empty;
         public bool Success { get; set; }
         public string Message { get; set; } = string.Empty;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            jsRuntimeAvailable = true;
+        }
+        await base.OnAfterRenderAsync(firstRender);
+    }
+
+    private void ClearError()
+    {
+        errorMessage = "";
+        StateHasChanged();
     }
 
     private void OnFileSelected(InputFileChangeEventArgs e)
@@ -170,25 +203,39 @@
     {
         if (!selectedFiles.Any())
         {
-            await JSRuntime.InvokeVoidAsync("alert", "Please select at least one file to upload.");
+            errorMessage = "Please select at least one file to upload.";
+            if (jsRuntimeAvailable)
+            {
+                await JSRuntime.InvokeVoidAsync("alert", errorMessage);
+            }
+            StateHasChanged();
             return;
         }
 
         isUploading = true;
         uploadResults.Clear();
+        errorMessage = "";
         StateHasChanged();
+
+        // Use a cancellation token for better control
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
 
         foreach (var file in selectedFiles)
         {
             try
             {
+                // Force UI update before each file upload
+                await InvokeAsync(StateHasChanged);
+                await Task.Delay(50, cts.Token); // Small delay to ensure UI updates
+
                 using var stream = file.BrowserFile.OpenReadStream(maxAllowedSize: 200 * 1024 * 1024); // 200MB max
                 var blobName = await ApiService.UploadFileAsync(
                     stream,
                     file.Name,
                     uploadModel.Folder,
                     uploadModel.Comment,
-                    uploadModel.CorrelationId
+                    uploadModel.CorrelationId,
+                    cts.Token
                 );
 
                 uploadResults.Add(new UploadResult
@@ -196,6 +243,25 @@
                     FileName = file.Name,
                     Success = true,
                     Message = $"Successfully uploaded as {blobName}"
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                uploadResults.Add(new UploadResult
+                {
+                    FileName = file.Name,
+                    Success = false,
+                    Message = "Upload was cancelled or timed out"
+                });
+                break; // Stop processing remaining files
+            }
+            catch (HttpRequestException httpEx)
+            {
+                uploadResults.Add(new UploadResult
+                {
+                    FileName = file.Name,
+                    Success = false,
+                    Message = $"Connection error: {httpEx.Message}. Please check if the API is running."
                 });
             }
             catch (Exception ex)
@@ -207,6 +273,9 @@
                     Message = $"Upload failed: {ex.Message}"
                 });
             }
+
+            // Update UI after each file
+            await InvokeAsync(StateHasChanged);
         }
 
         isUploading = false;
