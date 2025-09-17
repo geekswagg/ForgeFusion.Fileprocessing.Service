@@ -61,7 +61,7 @@ public class AzureBlobFileStorageService : IFileStorageService
         var properties = await blob.GetPropertiesAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
         var entity = new FileProcessingEntity
         {
-            RowKey = blobName,
+            RowKey = ToRowKey(blobName),
             FileName = fileName,
             ContainerName = _options.ContainerName,
             Folder = folder,
@@ -174,10 +174,11 @@ public class AzureBlobFileStorageService : IFileStorageService
     {
         await EnsureResourcesAsync(cancellationToken).ConfigureAwait(false);
         var path = folder is null ? blobName : Combine(folder, blobName);
+        var key = ToRowKey(path);
 
         try
         {
-            var response = await _table.GetEntityAsync<FileProcessingEntity>(FileProcessingEntity.DefaultPartitionKey, path, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var response = await _table.GetEntityAsync<FileProcessingEntity>(FileProcessingEntity.DefaultPartitionKey, key, cancellationToken: cancellationToken).ConfigureAwait(false);
             var entity = response.Value;
             entity.Status = status;
             entity.Folder = InferFolderFromStatus(status);
@@ -188,7 +189,7 @@ public class AzureBlobFileStorageService : IFileStorageService
             // create if not exist
             var entity = new FileProcessingEntity
             {
-                RowKey = path,
+                RowKey = key,
                 FileName = Path.GetFileName(path),
                 ContainerName = _options.ContainerName,
                 Folder = InferFolderFromStatus(status),
@@ -314,5 +315,22 @@ public class AzureBlobFileStorageService : IFileStorageService
         // Enforce partition key to configured audit table prefix
         entry.PartitionKey = "fileAudit";
         await _auditTable.AddEntityAsync(entry, ct).ConfigureAwait(false);
+    }
+
+    // Ensure a Table-safe RowKey (no '/', '\\', '#', '?', control chars)
+    private static string ToRowKey(string input)
+    {
+        if (string.IsNullOrEmpty(input)) return input;
+        var sb = new System.Text.StringBuilder(input.Length);
+        foreach (var ch in input)
+        {
+            if (ch == '/' || ch == '\\' || ch == '#' || ch == '?')
+                sb.Append(':');
+            else if (char.IsControl(ch) || ch == '\u007F')
+                sb.Append('_');
+            else
+                sb.Append(ch);
+        }
+        return sb.ToString();
     }
 }

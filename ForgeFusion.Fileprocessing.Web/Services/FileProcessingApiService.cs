@@ -1,5 +1,7 @@
 using ForgeFusion.Fileprocessing.Web.Models;
 using System.Net.Http.Json;
+using Microsoft.AspNetCore.StaticFiles;
+using System.Net.Http.Headers;
 
 namespace ForgeFusion.Fileprocessing.Web.Services;
 
@@ -38,6 +40,15 @@ public class FileProcessingApiService : IFileProcessingApiService
     {
         using var content = new MultipartFormDataContent();
         using var streamContent = new StreamContent(fileStream);
+
+        // Ensure the file part has a Content-Type so server-side validation can work
+        var provider = new FileExtensionContentTypeProvider();
+        if (!provider.TryGetContentType(fileName, out var mime))
+        {
+            mime = "application/octet-stream";
+        }
+        streamContent.Headers.ContentType = new MediaTypeHeaderValue(mime);
+
         content.Add(streamContent, "file", fileName);
 
         var queryParams = new List<string>();

@@ -34,12 +34,35 @@
                 <ValidationSummary class="text-danger" />
 
                 <div class="mb-3">
-                    <label class="form-label">Select Files</label>
-                    <InputFile OnChange="OnFileSelected" multiple class="form-control" accept=".pdf,.png,.jpg,.jpeg,.csv,.txt,.gif,.bmp,.zip,.html,.htm,.json,.xml" />
-                    <div class="form-text">
-                        Select one or more files to upload. Maximum size: 200MB per file.<br>
-                        <small class="text-muted">Allowed types: PDF, Images (PNG, JPG, JPEG, GIF, BMP), Text files (TXT, CSV, HTML, JSON, XML), ZIP archives</small>
+                    <label class="form-label">Upload Mode</label>
+                    <div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" id="modeSingle" name="uploadMode" @onclick="() => SetBulk(false)" checked="@(!isBulk)" />
+                            <label class="form-check-label" for="modeSingle">Single</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" id="modeBulk" name="uploadMode" @onclick="() => SetBulk(true)" checked="@isBulk" />
+                            <label class="form-check-label" for="modeBulk">Bulk</label>
+                        </div>
                     </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Select Files</label>
+                    @if (isBulk)
+                    {
+                        <InputFile OnChange="OnFileSelected" multiple class="form-control" accept=".pdf,.png,.jpg,.jpeg,.csv,.txt,.gif,.bmp,.zip,.html,.htm,.json,.xml" />
+                        <div class="form-text">Select one or more files to upload. Maximum size: 200MB per file.<br>
+                            <small class="text-muted">Allowed types: PDF, Images (PNG, JPG, JPEG, GIF, BMP), Text files (TXT, CSV, HTML, JSON, XML), ZIP archives</small>
+                        </div>
+                    }
+                    else
+                    {
+                        <InputFile OnChange="OnFileSelected" class="form-control" accept=".pdf,.png,.jpg,.jpeg,.csv,.txt,.gif,.bmp,.zip,.html,.htm,.json,.xml" />
+                        <div class="form-text">Select a single file to upload. Maximum size: 200MB.<br>
+                            <small class="text-muted">Allowed types: PDF, Images (PNG, JPG, JPEG, GIF, BMP), Text files (TXT, CSV, HTML, JSON, XML), ZIP archives</small>
+                        </div>
+                    }
                 </div>
 
                 <div class="mb-3">
@@ -70,7 +93,7 @@
                     else
                     {
                         <i class="bi bi-cloud-upload me-2"></i>
-                        <text>Upload Files</text>
+                        <text>@(isBulk ? "Upload Files" : "Upload File")</text>
                     }
                 </button>
             </EditForm>
@@ -142,6 +165,9 @@
     private bool jsRuntimeAvailable = false;
     private string errorMessage = "";
 
+    // New: upload mode flag (true = bulk/multiple, false = single)
+    private bool isBulk = true;
+
     private class UploadModel
     {
         public string Folder { get; set; } = "in";
@@ -178,11 +204,33 @@
         StateHasChanged();
     }
 
+    private void SetBulk(bool bulk)
+    {
+        isBulk = bulk;
+        // Clear previously selected files when switching modes
+        selectedFiles.Clear();
+        uploadResults.Clear();
+        StateHasChanged();
+    }
+
     private void OnFileSelected(InputFileChangeEventArgs e)
     {
         selectedFiles.Clear();
-        foreach (var file in e.GetMultipleFiles(10)) // Max 10 files
+        if (isBulk)
         {
+            foreach (var file in e.GetMultipleFiles(10)) // Max 10 files
+            {
+                selectedFiles.Add(new SelectedFile
+                {
+                    Name = file.Name,
+                    Size = file.Size,
+                    BrowserFile = file
+                });
+            }
+        }
+        else
+        {
+            var file = e.File; // single file
             selectedFiles.Add(new SelectedFile
             {
                 Name = file.Name,
@@ -220,7 +268,10 @@
         // Use a cancellation token for better control
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
 
-        foreach (var file in selectedFiles)
+        // If single mode, only process the first selected file
+        var filesToProcess = isBulk ? selectedFiles.ToList() : selectedFiles.Take(1).ToList();
+
+        foreach (var file in filesToProcess)
         {
             try
             {
@@ -279,7 +330,9 @@
         }
 
         isUploading = false;
-        selectedFiles.Clear();
+        // In single mode, keep the selected file so user can retry if needed; in bulk clear selection
+        if (isBulk)
+            selectedFiles.Clear();
         StateHasChanged();
     }
 
