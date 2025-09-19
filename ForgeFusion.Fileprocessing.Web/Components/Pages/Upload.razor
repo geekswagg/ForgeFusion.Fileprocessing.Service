@@ -269,7 +269,7 @@
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
 
         // If single mode, only process the first selected file
-        var filesToProcess = isBulk ? selectedFiles.ToList() : selectedFiles.Take(1).ToList();
+        var filesToProcess = isBulk ? selectedFiles : selectedFiles.Take(1).ToList();
 
         foreach (var file in filesToProcess)
         {
