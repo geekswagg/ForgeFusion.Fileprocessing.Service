@@ -41,11 +41,11 @@ public class FileProcessingApiService : IFileProcessingApiService
         using var content = new MultipartFormDataContent();
         using var streamContent = new StreamContent(fileStream);
 
-        // Set the content type for the file based on its extension so the API can validate it
+        // Ensure the file part has a Content-Type so server-side validation can work
         var provider = new FileExtensionContentTypeProvider();
         if (!provider.TryGetContentType(fileName, out var mime))
         {
-            mime = "application/octet-stream"; // fallback
+            mime = "application/octet-stream";
         }
         streamContent.Headers.ContentType = new MediaTypeHeaderValue(mime);
 

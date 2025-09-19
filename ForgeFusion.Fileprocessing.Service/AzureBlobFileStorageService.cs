@@ -317,22 +317,20 @@ public class AzureBlobFileStorageService : IFileStorageService
         await _auditTable.AddEntityAsync(entry, ct).ConfigureAwait(false);
     }
 
-    // RowKey must not contain '/', '\\', '#', '?' or control characters
+    // Ensure a Table-safe RowKey (no '/', '\\', '#', '?', control chars)
     private static string ToRowKey(string input)
     {
         if (string.IsNullOrEmpty(input)) return input;
-        Span<char> buffer = stackalloc char[input.Length];
-        int idx = 0;
+        var sb = new System.Text.StringBuilder(input.Length);
         foreach (var ch in input)
         {
-            buffer[idx++] = ch switch
-            {
-                '/' or '\\' or '#' or '?' => ':',
-                >= '\u0000' and <= '\u001F' => '_',
-                '\u007F' => '_',
-                _ => ch
-            };
+            if (ch == '/' || ch == '\\' || ch == '#' || ch == '?')
+                sb.Append(':');
+            else if (char.IsControl(ch) || ch == '\u007F')
+                sb.Append('_');
+            else
+                sb.Append(ch);
         }
-        return new string(buffer.Slice(0, idx));
+        return sb.ToString();
     }
 }
